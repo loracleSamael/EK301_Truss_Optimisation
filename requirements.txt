@@ -1,0 +1,7 @@
+# Python dependencies for the project.
+# numpy        - matrix maths for the equilibrium solver and geometry
+# matplotlib   - truss drawings
+# scipy        - reading/writing .mat files for the MATLAB bridge
+# cma          - (optional) CMA-ES for the geometry optimisation loop
+# pytest       - running the tests
+# matlabengine - (optional) persistent MATLAB session instead of file-based calls

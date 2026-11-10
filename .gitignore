@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.venv/
+results/designs/*
+results/matlab_io/*
+results/figures/*
+!results/*/.gitkeep
