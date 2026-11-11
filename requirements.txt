@@ -1,7 +1,11 @@
-# Python dependencies for the project.
+# Python dependencies for the project (pinned).
 # numpy        - matrix maths for the equilibrium solver and geometry
+# scipy        - SLSQP geometry optimiser, .mat file writing for the MATLAB bridge
 # matplotlib   - truss drawings
-# scipy        - reading/writing .mat files for the MATLAB bridge
-# cma          - (optional) CMA-ES for the geometry optimisation loop
+# networkx     - topology enumeration (isomorphism de-duplication, planarity test)
 # pytest       - running the tests
-# matlabengine - (optional) persistent MATLAB session instead of file-based calls
+numpy==2.5.4
+scipy==1.18.1
+matplotlib==3.11.2
+networkx==3.7
+pytest==9.2.0
