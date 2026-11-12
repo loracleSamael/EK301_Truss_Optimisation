@@ -7,13 +7,15 @@
 #   1. enumerate  all (topology, roles) candidates for J_MIN..J_MAX (exhaustive, deterministic)
 #   2. screen     random + repaired geometries per candidate (optimiser.py)
 #   3. optimise   SLSQP per candidate and objective, stick assignments included (geometry_opt.py)
-#   4. sensitivity re-score the finalists with the lower-bound buckling fit (sensitivity.py)
+#   4. sensitivity re-score the best few designs with the lower-bound buckling fit (sensitivity.py)
 #   5. select     best design per objective
 #   6. write      drawing (PNG), text report, JSON and MATLAB input files (visualise.py)
 #
-#   7. verify     (--matlab) run the finalists through matlab/truss_analysis.m in one MATLAB
-#                 session, compare with the Python solver, and rewrite the two winners'
-#                 outputs with the MATLAB-confirmed forces and the verification result
+#   7. verify     (--matlab) run the two winners through matlab/truss_analysis.m in one MATLAB
+#                 session, compare with the Python solver, and rewrite their outputs with the
+#                 MATLAB-confirmed forces and the verification result
+#
+# Only the two winning trusses produce files: nothing is written for runner-up designs.
 
 import os
 import time
@@ -30,7 +32,7 @@ TRUSS_NAMES = {
                                     "Truss 2: maximum failure load / cost"),
 }
 
-# --quick: all candidates but far fewer samples, starts and finalists (about a minute at most)
+# --quick: all candidates but far fewer samples, starts and top candidates (about 20 s)
 QUICK = {"n_samples": 40, "top_k": 6, "n_starts": 2}
 
 
@@ -46,7 +48,7 @@ class Options:
     top_k: int = config.TOP_K
     n_starts: int = config.SLSQP_STARTS
     quick: bool = False
-    matlab: bool = config.USE_MATLAB     # verify the finalists with MATLAB
+    matlab: bool = config.USE_MATLAB     # verify the two winners with MATLAB
     out_dir: Path = None                 # None: the folders from config.py
     regret: bool = True                  # also measure the regret in the sensitivity check
     quiet: bool = False
@@ -67,7 +69,6 @@ class PipelineResult:
     paths: dict = field(default_factory=dict)            # objective -> {kind: Path}
     names: dict = field(default_factory=dict)            # objective -> file stem
     verification: dict = field(default_factory=dict)     # objective -> matlab_io.Comparison (winner)
-    finalist_checks: dict = field(default_factory=dict)  # objective -> [(rank, Comparison), ...]
     matlab_status: str = "not requested"                 # "passed", "FAILED", "skipped: ...", ...
     stats: dict = field(default_factory=dict)            # counts and timings
     warnings: list = field(default_factory=list)
@@ -77,6 +78,11 @@ class PipelineResult:
     def matlab_failed(self) -> bool:
         """True if MATLAB verification was requested but did not run cleanly or found a mismatch."""
         return self.matlab_status.startswith(("FAILED", "skipped"))
+
+
+def submission_file(objective: str) -> str:
+    """File name of a winner's MATLAB input, e.g. TrussDesign1_MaryJoeBob_A1.mat."""
+    return matlab_io.submission_filename(list(scoring.OBJECTIVES).index(objective) + 1)
 
 
 def _dirs(options: Options) -> dict:
@@ -166,7 +172,8 @@ def run(options: Options = None, log=print) -> PipelineResult:
     for objective, design in result.designs.items():
         name, title = TRUSS_NAMES[objective]
         result.names[objective] = name
-        result.paths[objective] = visualise.write_outputs(design, name, title, **dirs)
+        result.paths[objective] = visualise.write_outputs(
+            design, name, title, submission_file=submission_file(objective), **dirs)
     if options.matlab:
         t = time.perf_counter()
         _verify_with_matlab(result, dirs, log)
@@ -185,8 +192,9 @@ def run(options: Options = None, log=print) -> PipelineResult:
 # MATLAB verification
 # --------------------------------------------------------------------------------------
 def _verify_with_matlab(result: PipelineResult, dirs: dict, log) -> None:
-    """Run the finalists through MATLAB and update the winners' outputs. Never raises: a MATLAB
-    problem becomes a warning and a status, so hours of optimisation are not lost."""
+    """Run the two winners through MATLAB and update their outputs. Never raises: a MATLAB problem
+    becomes a warning and a status, so the optimisation is not lost. Only the winners' files are
+    written (their inputs already exist; MATLAB adds one output pair for each)."""
     if not matlab_io.matlab_available():
         result.matlab_status = "skipped: MATLAB not found"
         result.warnings.append("MATLAB verification skipped: MATLAB was not found (set "
@@ -194,48 +202,31 @@ def _verify_with_matlab(result: PipelineResult, dirs: dict, log) -> None:
         log("MATLAB verification skipped: MATLAB not found.")
         return
 
-    entries = []                                   # (objective, rank, design, input path)
-    for objective, ranked in result.ranked.items():
-        stem = result.names[objective]
-        for rank, design in enumerate(ranked[:config.N_FINALISTS], start=1):
-            if rank == 1:
-                path = result.paths[objective]["matlab_mat"]
-            else:
-                path = matlab_io.export_inputs(design.coords, design.candidate.members,
-                                               f"{stem}_finalist{rank}", dirs["matlab_dir"])["mat"]
-            entries.append((objective, rank, design, path))
-    log(f"Verifying {len(entries)} designs with MATLAB (one session) ...")
+    inputs = {objective: result.paths[objective]["matlab_mat"] for objective in result.designs}
+    log(f"Verifying the {len(inputs)} winning trusses with MATLAB ...")
     try:
-        outputs = matlab_io.run_matlab([e[3] for e in entries], dirs["matlab_dir"])
+        outputs = matlab_io.run_matlab(list(inputs.values()), dirs["matlab_dir"])
     except matlab_io.MatlabError as exc:
         result.matlab_status = f"FAILED to run: {exc}"
         result.warnings.append(f"MATLAB verification could not be completed: {exc}")
         log(f"MATLAB verification failed to run: {exc}")
         return
 
-    for objective in result.designs:
-        result.finalist_checks[objective] = []
-    for objective, rank, design, path in entries:
-        out = outputs[Path(path).resolve()]
+    for objective, design in result.designs.items():
+        out = outputs[Path(inputs[objective]).resolve()]
         comparison = matlab_io.compare_results(design, out)
-        if rank == 1:
-            result.verification[objective] = comparison
-            name, title = TRUSS_NAMES[objective]
-            forces = matlab_io.matlab_forces_as_python(out) if comparison.ok else None
-            result.paths[objective] = visualise.write_outputs(
-                design, name, title, forces=forces, verification=comparison, **dirs)
-        else:
-            result.finalist_checks[objective].append((rank, comparison))
+        result.verification[objective] = comparison
+        name, title = TRUSS_NAMES[objective]
+        forces = matlab_io.matlab_forces_as_python(out) if comparison.ok else None
+        result.paths[objective] = visualise.write_outputs(
+            design, name, title, forces=forces, verification=comparison,
+            submission_file=submission_file(objective), **dirs)
         if not comparison.ok:
             problems = "; ".join(matlab_io.diagnose(design, out)) or "see the comparison table"
-            result.warnings.append(f"MATLAB verification FAILED for {result.names[objective]} "
-                                   f"(rank {rank}): {problems}")
-    failed = [w for w in result.warnings if w.startswith("MATLAB verification FAILED")]
-    result.matlab_status = "FAILED: mismatch" if failed else "passed"
-    n_ok = sum(c.ok for cs in result.finalist_checks.values() for _, c in cs) \
-        + sum(c.ok for c in result.verification.values())
-    log(f"  MATLAB verification {result.matlab_status}: {n_ok} of {len(entries)} designs agree.")
-
+            result.warnings.append(f"MATLAB verification FAILED for {name}: {problems}")
+    ok = [c.ok for c in result.verification.values()]
+    result.matlab_status = "passed" if all(ok) else "FAILED: mismatch"
+    log(f"  MATLAB verification {result.matlab_status}: {sum(ok)} of {len(ok)} trusses agree.")
 
 # --------------------------------------------------------------------------------------
 # Summary
@@ -289,9 +280,7 @@ def format_summary(result: PipelineResult) -> str:
             cmp = result.verification.get(objective)
             if cmp is None:
                 continue
-            checks = result.finalist_checks.get(objective, [])
-            lines.append(f"  {result.names[objective]}: {'PASSED' if cmp.ok else 'FAILED'}; "
-                         f"finalists {sum(c.ok for _, c in checks)} of {len(checks)} also agree")
+            lines.append(f"  {result.names[objective]}: {'PASSED' if cmp.ok else 'FAILED'}")
             lines += [f"    {line}" for line in cmp.lines()]
     if result.warnings:
         lines += ["", "WARNINGS"] + [f"  - {w}" for w in result.warnings]

@@ -360,7 +360,8 @@ def design_to_dict(design, name: str = "", verification=None) -> dict:
 
 
 def write_outputs(design, name: str, title: str = None, forces=None,
-                  figures_dir=None, designs_dir=None, matlab_dir=None, verification=None) -> dict:
+                  figures_dir=None, designs_dir=None, matlab_dir=None, verification=None,
+                  submission_file: str = None) -> dict:
     """Write the drawing (PNG), text report, JSON and MATLAB input files; return their paths.
 
     `forces` (member forces at config.TEST_LOAD, analysis.py sign convention) replaces the Python
@@ -389,5 +390,6 @@ def write_outputs(design, name: str, title: str = None, forces=None,
     paths["json"] = js
 
     paths.update({f"matlab_{k}": v for k, v in matlab_io.export_inputs(
-        design.coords, design.candidate.members, name, matlab_dir).items()})
+        design.coords, design.candidate.members, name, matlab_dir,
+        submission_file=submission_file).items()})
     return paths

@@ -5,6 +5,12 @@
 # in one headless batch (matlab -batch, via matlab/run_verification.m), read the results back and
 # compare them with the Python solver.
 #
+# The input files are MATLAB-format .mat files with exactly what
+#   save('TrussDesign1_MaryJoeBob_A1.mat','C','Sx','Sy','X','Y','L')
+# would write: the six variables as doubles, a compressed (default, v7) MAT-file, variables stored in
+# MATLAB's alphabetical order. The two winners are named TrussDesign<N>_<team>_<section>.mat
+# (config.SUBMISSION_TEAM / SUBMISSION_SECTION).
+#
 # Input format (shapes and variable names taken from matlab/truss_analysis.m's header and
 # matlab/calculate_forces.m; all indices are 1-based in MATLAB, joint k = row k, member m = column m):
 #   C   (J x M)   connection matrix, 1 where member (column) touches joint (row)
@@ -28,6 +34,7 @@
 import glob
 import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -39,7 +46,7 @@ from src import geometry
 
 MATLAB_FORCE_SIGN = -1.0      # F_matlab = MATLAB_FORCE_SIGN * F_python, with L negative for down
 LOAD_SIGN = -1.0              # sign of a downward load entry in L
-MAT_VARIABLES = ("C", "X", "Y", "Sx", "Sy", "L")
+MAT_VARIABLES = ("C", "Sx", "Sy", "X", "Y", "L")      # order of the save(...) command
 
 
 # --------------------------------------------------------------------------------------
@@ -97,39 +104,64 @@ def _matlab_literal(name: str, a: np.ndarray) -> str:
     return f"{name} = [\n" + ";\n".join(rows) + "\n];\n"
 
 
+def submission_filename(design_number: int) -> str:
+    """Name of a submission file, e.g. TrussDesign1_MaryJoeBob_A1.mat."""
+    return f"TrussDesign{design_number}_{config.SUBMISSION_TEAM}_{config.SUBMISSION_SECTION}.mat"
+
+
+def save_command(filename: str) -> str:
+    """The MATLAB command that writes the same file: save('<file>','C','Sx','Sy','X','Y','L')."""
+    return f"save('{filename}'," + ",".join(f"'{v}'" for v in MAT_VARIABLES) + ")"
+
+
 def write_mat(matrices: dict, path) -> None:
-    """Save the six matrices to a .mat file (variable names C, X, Y, Sx, Sy, L)."""
+    """Write the six matrices as MATLAB's save(...) would: a compressed v7 MAT-file with the
+    variables C, Sx, Sy, X, Y, L stored in MATLAB's alphabetical order."""
     from scipy.io import savemat
-    savemat(str(path), {k: matrices[k] for k in MAT_VARIABLES})
+    savemat(str(path), {k: matrices[k] for k in sorted(MAT_VARIABLES)}, do_compression=True)
 
 
-def write_matlab_text(matrices: dict, path, title: str = "") -> None:
-    """Save the same matrices as a readable MATLAB script that can be pasted or run directly."""
+def write_matlab_text(matrices: dict, path, title: str = "", save_as: str = None) -> None:
+    """Save the matrices as a readable MATLAB script that defines them and ends with save(...).
+
+    Running it in MATLAB creates `save_as` (default: the script's name with .mat) in the current
+    folder, with the same contents as the .mat file written by write_mat.
+    """
     n_j, n_m = matrices["C"].shape
+    save_as = save_as or (Path(path).stem + ".mat")
     head = [
         f"% MATLAB input for: {title}" if title else "% MATLAB input",
         f"% {n_j} joints, {n_m} members. Joint k = row k (1 = pin, 2 = roller, 3 = load joint),",
         "% member m = column m. Units: inches and oz.",
-        "% PLACEHOLDER: the MATLAB verification step is not implemented yet.",
         f"% Sign convention: downward load is {'negative' if LOAD_SIGN < 0 else 'positive'} in L "
         "(as in calculate_forces.m).",
+        f"% Run this script to create {save_as}.",
         f"joint_cnt = {n_j};",
         f"member_cnt = {n_m};",
         "",
     ]
-    body = [_matlab_literal(k, matrices[k]) for k in ("C", "X", "Y", "Sx", "Sy", "L")]
+    body = [_matlab_literal(k, matrices[k]) for k in MAT_VARIABLES]
     with open(path, "w") as f:
-        f.write("\n".join(head) + "\n".join(body))
+        f.write("\n".join(head) + "\n".join(body) + save_command(save_as) + "\n")
 
 
-def export_inputs(coords, members, name: str, folder=None, load: float = config.TEST_LOAD) -> dict:
-    """Write <name>.mat and <name>.m to results/matlab_io/ and return their paths."""
+def export_inputs(coords, members, name: str, folder=None, load: float = config.TEST_LOAD,
+                  submission_file: str = None) -> dict:
+    """Write the MATLAB input files for a design and return their paths ("mat" and "text").
+
+    With `submission_file` (e.g. submission_filename(1)) the .mat file has that name and the
+    readable script is <same name>.m; otherwise they are <name>_input.mat and <name>_input.m.
+    """
     folder = config.MATLAB_IO_DIR if folder is None else folder
     folder.mkdir(parents=True, exist_ok=True)
     mats = build_matrices(round_for_export(coords), members, load)
-    mat_path, txt_path = folder / f"{name}_input.mat", folder / f"{name}_input.m"
+    if submission_file:
+        mat_path = folder / submission_file
+        txt_path = mat_path.with_suffix(".m")
+    else:
+        mat_path, txt_path = folder / f"{name}_input.mat", folder / f"{name}_input.m"
     write_mat(mats, mat_path)
-    write_matlab_text(mats, txt_path, title=name)
+    write_matlab_text(mats, txt_path, title=name, save_as=mat_path.name)
     return {"mat": mat_path, "text": txt_path}
 
 
@@ -179,11 +211,17 @@ class MatlabOutput:
 
 
 def output_paths(input_mat) -> tuple:
-    """(<name>_output.mat, <name>_output.txt) belonging to a <name>_input.mat file."""
-    base = str(input_mat)
-    if not base.endswith("_input.mat"):
-        raise ValueError(f"expected a file named <name>_input.mat, got {base}")
-    return Path(base[:-len("_input.mat")] + "_output.mat"), Path(base[:-len("_input.mat")] + "_output.txt")
+    """(<stem>_output.mat, <stem>_output.txt) belonging to an input .mat file.
+
+    A trailing "_input" in the stem is replaced (truss1_input.mat -> truss1_output.mat); any other
+    name just gets "_output" appended (TrussDesign1_X_A3.mat -> TrussDesign1_X_A3_output.mat).
+    Matches matlab/run_verification.m.
+    """
+    path = Path(input_mat)
+    if path.suffix != ".mat":
+        raise ValueError(f"expected a .mat file, got {path}")
+    stem = path.stem[:-len("_input")] if path.stem.endswith("_input") else path.stem
+    return path.with_name(stem + "_output.mat"), path.with_name(stem + "_output.txt")
 
 
 def read_output(input_mat) -> MatlabOutput:
@@ -211,10 +249,12 @@ def _matlab_string(text) -> str:
 def run_matlab(inputs, workdir=None, timeout: float = None, executable=None) -> dict:
     """Run matlab/truss_analysis.m on exported input files in ONE headless MATLAB session.
 
-    `inputs` are the <name>_input.mat paths from export_inputs. Returns {input path: MatlabOutput}.
-    Each design's printout is saved next to its input as <name>_output.txt, and the session log as
-    matlab_run.log in `workdir`. Raises MatlabNotAvailable if MATLAB is not installed and MatlabError
-    if the run fails, times out, or any design produces no usable result.
+    `inputs` are the .mat paths from export_inputs. Returns {input path: MatlabOutput}.
+    Each design's printout is saved next to its input as <stem>_output.txt. Nothing else is left in
+    the folder on success: the batch list lives in a temporary folder, and the session log
+    (matlab_run.log in `workdir`) is written only when the run fails, to help diagnose it.
+    Raises MatlabNotAvailable if MATLAB is not installed and MatlabError if the run fails, times
+    out, or any design produces no usable result.
     """
     exe = Path(executable) if executable else find_matlab()
     if exe is None or not Path(exe).exists():
@@ -228,26 +268,36 @@ def run_matlab(inputs, workdir=None, timeout: float = None, executable=None) -> 
             raise MatlabError(f"input file not found: {p}")
     workdir = Path(workdir) if workdir else inputs[0].parent
     workdir.mkdir(parents=True, exist_ok=True)
-    list_file = workdir / "_matlab_batch_list.txt"
-    list_file.write_text("\n".join(str(p) for p in inputs) + "\n")
     for p in inputs:                                   # stale results must not be mistaken for new ones
         for stale in output_paths(p):
             stale.unlink(missing_ok=True)
-
-    command = f"addpath({_matlab_string(config.MATLAB_DIR)}); run_verification({_matlab_string(list_file)})"
     timeout = config.MATLAB_TIMEOUT if timeout is None else timeout
-    try:
-        proc = subprocess.run([str(exe), "-batch", command], capture_output=True, text=True,
-                              timeout=timeout, cwd=str(workdir))
-    except subprocess.TimeoutExpired as exc:
-        raise MatlabError(f"MATLAB did not finish within {timeout:g} s") from exc
-    except OSError as exc:
-        raise MatlabError(f"could not start MATLAB ({exe}): {exc}") from exc
-    (workdir / "matlab_run.log").write_text(proc.stdout + ("\n" + proc.stderr if proc.stderr else ""))
+
+    def write_log(text: str) -> None:
+        (workdir / "matlab_run.log").write_text(text)
+
+    with tempfile.TemporaryDirectory(prefix="truss_matlab_") as tmp:
+        list_file = Path(tmp) / "batch_list.txt"
+        list_file.write_text("\n".join(str(p) for p in inputs) + "\n")
+        command = (f"addpath({_matlab_string(config.MATLAB_DIR)}); "
+                   f"run_verification({_matlab_string(list_file)})")
+        try:
+            proc = subprocess.run([str(exe), "-batch", command], capture_output=True, text=True,
+                                  timeout=timeout, cwd=str(workdir))
+        except subprocess.TimeoutExpired as exc:
+            raise MatlabError(f"MATLAB did not finish within {timeout:g} s") from exc
+        except OSError as exc:
+            raise MatlabError(f"could not start MATLAB ({exe}): {exc}") from exc
+    log_text = proc.stdout + ("\n" + proc.stderr if proc.stderr else "")
     if proc.returncode != 0:
+        write_log(log_text)
         tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-8:])
         raise MatlabError(f"MATLAB exited with status {proc.returncode}:\n{tail}")
-    return {p: read_output(p) for p in inputs}
+    try:
+        return {p: read_output(p) for p in inputs}
+    except MatlabError:
+        write_log(log_text)
+        raise
 
 
 # --------------------------------------------------------------------------------------

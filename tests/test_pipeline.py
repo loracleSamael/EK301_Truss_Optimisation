@@ -54,6 +54,18 @@ def test_pipeline_selects_one_legal_design_per_objective(small_run):
             >= result.designs[sc.OBJ_MAX_LOAD].p_over_cost - 1e-6)
 
 
+def test_winners_matlab_inputs_use_the_submission_names(small_run):
+    result, out = small_run
+    for number, objective in enumerate(sc.OBJECTIVES, start=1):
+        mat = result.paths[objective]["matlab_mat"]
+        assert mat.name == f"TrussDesign{number}_{config.SUBMISSION_TEAM}_{config.SUBMISSION_SECTION}.mat"
+        assert result.paths[objective]["matlab_text"].name == mat.name.replace(".mat", ".m")
+        assert result.paths[objective]["matlab_text"].read_text().rstrip().splitlines()[-1] == \
+            pl.matlab_io.save_command(mat.name)
+    assert pl.submission_file(sc.OBJ_MAX_LOAD).startswith("TrussDesign1_")
+    assert pl.submission_file(sc.OBJ_MAX_LOAD_PER_COST).startswith("TrussDesign2_")
+
+
 def test_pipeline_writes_every_output(small_run):
     result, out = small_run
     assert result.names == {sc.OBJ_MAX_LOAD: "truss1_max_load",
@@ -138,13 +150,14 @@ def test_live_matlab_verification_in_the_pipeline(tmp_path):
         data = json.loads(paths["json"].read_text())
         assert data["matlab_verification"]["ok"] is True
         assert paths["figure"].stat().st_size > 10_000
-        assert (tmp_path / "matlab_io" / f"{result.names[objective]}_output.txt").exists()
-        expected = min(len(result.ranked[objective]), pl.config.N_FINALISTS) - 1
-        assert len(result.finalist_checks[objective]) == expected      # every runner-up checked
-        assert all(c.ok for _, c in result.finalist_checks[objective])
+        assert pl.matlab_io.output_paths(paths["matlab_mat"])[1].exists()
     text = result.summary_path.read_text()
     assert "MATLAB verification (matlab/truss_analysis.m): passed" in text
-    assert (tmp_path / "matlab_io" / "matlab_run.log").exists()
+    assert "also agree" not in text                              # no runner-up checks any more
+    # only the two winners leave files: input .mat/.m and output .mat/.txt for each, nothing else
+    stems = [result.paths[o]["matlab_mat"].stem for o in sc.OBJECTIVES]
+    assert sorted(p.name for p in (tmp_path / "matlab_io").iterdir()) == sorted(
+        f"{s}{suffix}" for s in stems for suffix in (".mat", ".m", "_output.mat", "_output.txt"))
 
 
 def test_matlab_requested_but_missing_is_skipped_not_fatal(monkeypatch, tmp_path):
@@ -166,6 +179,32 @@ def test_matlab_that_fails_to_run_is_reported_not_raised(monkeypatch, tmp_path):
     assert result.matlab_status.startswith("FAILED to run") and result.matlab_failed
     assert any("licence checkout failed" in w for w in result.warnings)
     assert result.designs                                       # nothing was lost
+
+
+def test_only_the_two_winners_are_sent_to_matlab_and_written(monkeypatch, tmp_path):
+    sent = []
+    run = fake_matlab_run()
+
+    def recording_run(inputs, workdir=None, **kw):
+        sent.extend(Path(p).name for p in inputs)
+        return run(inputs, workdir, **kw)
+    monkeypatch.setattr(pl.matlab_io, "matlab_available", lambda: True)
+    monkeypatch.setattr(pl.matlab_io, "run_matlab", recording_run)
+    result = run_small(tmp_path, matlab=True)
+    assert sorted(sent) == sorted(result.paths[o]["matlab_mat"].name for o in sc.OBJECTIVES)
+    assert len(sent) == 2 and not any("finalist" in name for name in sent)
+    assert not any("finalist" in p.name for p in tmp_path.rglob("*"))
+    assert sorted(p.name for p in (tmp_path / "matlab_io").iterdir()) == sorted(
+        result.paths[o][k].name for o in sc.OBJECTIVES for k in ("matlab_mat", "matlab_text"))
+    assert result.matlab_status == "passed" and len(result.verification) == 2
+
+
+def test_a_plain_run_writes_matlab_inputs_for_the_winners_only(tmp_path):
+    result = run_small(tmp_path)
+    names = sorted(p.name for p in (tmp_path / "matlab_io").iterdir())
+    assert names == sorted(result.paths[o][k].name for o in sc.OBJECTIVES
+                           for k in ("matlab_mat", "matlab_text"))
+    assert len(names) == 4
 
 
 def test_matlab_agreement_updates_the_winners_outputs(monkeypatch, tmp_path):

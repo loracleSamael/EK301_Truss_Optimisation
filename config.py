@@ -101,6 +101,9 @@ COST_TIEBREAK = 1e-6                 # weight on cost to break ties in the max-l
 USE_MATLAB = False                   # default for the pipeline; the --matlab flag turns it on
 MATLAB_EXECUTABLE = None             # path to the MATLAB launcher; None = auto-detect (PATH, then
                                      # /Applications/MATLAB_*.app/bin/matlab)
+SUBMISSION_TEAM = "XingyangAshleyLeonardo"   # team part of the submission file name, written like the
+                                             # example TrussDesign1_MaryJoeBob_A1.mat (first names)
+SUBMISSION_SECTION = "A3"            # section part of that name (EK301 section A3, from the MATLAB header)
 MATLAB_TIMEOUT = 900                 # seconds allowed for one batch MATLAB run (startup included)
 MATLAB_REL_TOL = 1e-3                # relative tolerance for the Python-vs-MATLAB comparison
                                      # (MATLAB uses 3391.3, Python 3391.349: about 1.4e-5 apart)

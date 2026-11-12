@@ -108,7 +108,7 @@ def test_live_validation_with_real_matlab(designs, tmp_path):
     report = val.validate(designs[:6], tmp_path)
     assert report.passed, "\n".join(report.lines())
     assert report.worst_case()["max load, lower bound (oz)"] < 0.01
-    assert (tmp_path / "matlab_run.log").exists()
+    assert not (tmp_path / "matlab_run.log").exists()          # a log is kept only on failure
 
 
 # --------------------------------------------------------------------------------------

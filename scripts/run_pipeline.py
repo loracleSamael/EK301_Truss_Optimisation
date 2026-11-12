@@ -2,7 +2,7 @@
 # Entry point that runs the whole project:
 #   python scripts/run_pipeline.py            full run (a few minutes)
 #   python scripts/run_pipeline.py --quick    small run for a quick look or a smoke test
-#   python scripts/run_pipeline.py --matlab   also verify the finalists with MATLAB
+#   python scripts/run_pipeline.py --matlab   also verify the two winners with MATLAB
 #
 # Exit status: 0 success, 1 no legal design found, 3 --matlab requested but MATLAB was missing,
 # failed to run, or disagreed with the Python solver.
@@ -39,9 +39,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--starts", type=int, default=config.SLSQP_STARTS,
                    help="SLSQP starts per candidate")
     p.add_argument("--quick", action="store_true",
-                   help="small run: fewer samples, starts and finalists")
+                   help="small run: fewer samples, starts and top candidates")
     p.add_argument("--matlab", action="store_true",
-                   help="verify the finalists with MATLAB (matlab/truss_analysis.m); exit status 3 "
+                   help="verify the two winning trusses with MATLAB (matlab/truss_analysis.m); exit status 3 "
                         "if MATLAB is missing, fails to run, or disagrees with the Python solver")
     p.add_argument("--no-regret", action="store_true",
                    help="skip the regret measurement in the sensitivity check")

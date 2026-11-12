@@ -8,7 +8,7 @@ two trusses:
 
 Every candidate is a determinate, fully triangulated, planar truss (M = 2J - 3) on a pin and a roller.
 Fast analysis runs in Python during the search. The provided MATLAB analysis
-(`matlab/truss_analysis.m`) can then verify the finalists. Each of the two trusses is written out as a
+(`matlab/truss_analysis.m`) can then verify the two winners. Each of the two trusses is written out as a
 to-scale drawing, a text report, a JSON file and the MATLAB input files.
 
 ## Results (seed 301, full settings)
@@ -54,7 +54,7 @@ Notes on these numbers:
   the top five. A design re-optimised against the lower bound would gain 3.6 % (Truss 1) and 2.8 %
   (Truss 2) in lower-bound P_max, at a cost of under 1 % of nominal P_max. The pipeline prints this as the
   "regret" of each winner.
-- **Verified against MATLAB.** Both winners and their four runner-ups each (10 designs) agree with
+- **Verified against MATLAB.** Both winners agree with
   `matlab/truss_analysis.m`: member forces, reactions, lengths and cost to about 1e-15, and the
   lower-bound max load to 9e-4 oz (the MATLAB file uses 3391.3 where Python uses 3391.349). The same holds
   for 50 random legal designs (`scripts/validate_against_matlab.py`).
@@ -80,7 +80,7 @@ optional. It was tested with R2025a. `matlab -batch` needs R2019a or newer and `
 ```
 .venv/bin/python scripts/run_pipeline.py              # full run
 .venv/bin/python scripts/run_pipeline.py --quick      # small run for a quick look
-.venv/bin/python scripts/run_pipeline.py --matlab     # also verify the finalists with MATLAB
+.venv/bin/python scripts/run_pipeline.py --matlab     # also verify the two winners with MATLAB
 .venv/bin/python scripts/validate_against_matlab.py   # compare Python and MATLAB on 50 random designs
 .venv/bin/python -m pytest -q                         # run the tests
 ```
@@ -89,8 +89,8 @@ Options of `run_pipeline.py`:
 
 | Flag | Meaning |
 |---|---|
-| `--quick` | fewer samples (40), starts (2) and finalists (6): about 17 s, same winners here |
-| `--matlab` | run the 5 best designs of each objective through MATLAB in one session, compare, and show MATLAB-verified forces in the winners' outputs |
+| `--quick` | fewer samples (40), starts (2) and top candidates (6): about 17 s, same winners here |
+| `--matlab` | run the two winning trusses through MATLAB in one session, compare, and show MATLAB-verified forces in their outputs |
 | `--workers N` | worker processes (default: min(8, CPU count)) |
 | `--seed N` | random seed (default 301); a run is reproducible for a given seed |
 | `--samples N` | screening samples per candidate (default 200) |
@@ -112,12 +112,22 @@ For each truss (`truss1_max_load`, `truss2_max_load_per_cost`):
 | `figures/<name>.png` | to-scale drawing: member lengths and forces (red = compression, blue = tension), joint coordinates, supports, load arrow with the failure load, span, member table, cutting plan |
 | `designs/<name>.txt` | the same information as text, plus reactions and the MATLAB verification block |
 | `designs/<name>.json` | machine-readable copy (0-based indices) |
-| `matlab_io/<name>_input.mat` and `.m` | the six MATLAB inputs (`C, X, Y, Sx, Sy, L`) |
-| `matlab_io/<name>_output.mat` and `.txt` | MATLAB's results and printout (with `--matlab`) |
+| `matlab_io/TrussDesign<N>_<team>_<section>.mat` | the six MATLAB inputs, exactly what `save('TrussDesign1_MaryJoeBob_A1.mat','C','Sx','Sy','X','Y','L')` writes (N = 1 for truss 1, 2 for truss 2) |
+| `matlab_io/TrussDesign<N>_<team>_<section>.m` | the same matrices as a readable script that ends with that `save(...)` command |
+| `matlab_io/TrussDesign<N>_<team>_<section>_output.mat` and `.txt` | MATLAB's results and printout (with `--matlab`) |
 | `designs/run_summary.txt` | the run summary that is also printed |
 
-Runner-up designs sent to MATLAB are written as `<name>_finalist<k>_input.mat` etc., and the MATLAB
-session log is `matlab_io/matlab_run.log`.
+The team and section parts of the MATLAB file names are `SUBMISSION_TEAM` (default
+`XingyangAshleyLeonardo`) and `SUBMISSION_SECTION` (default `A3`) in `config.py`. The `.mat` files are
+compressed MATLAB (v7) files with the variables stored in MATLAB's alphabetical order (C, L, Sx, Sy, X, Y),
+as `save` writes them.
+
+Only the two winning trusses produce files: a run writes 3 files per truss under `designs/` and `figures/`
+(drawing, report, JSON), 2 in `matlab_io/` (`.mat` and `.m`), and with `--matlab` 2 more
+(`_output.mat` and `_output.txt`), plus `designs/run_summary.txt`. Nothing is written for runner-up designs.
+The MATLAB session log `matlab_io/matlab_run.log` appears only if MATLAB fails, to help diagnose it.
+Running again overwrites files with the same names; files with other names (for example after changing
+`SUBMISSION_TEAM`) are left in place, so use `--out-dir` or clear `results/` to start clean.
 
 ## How it works
 
@@ -132,10 +142,10 @@ session log is `matlab_io/matlab_run.log`.
    `capacity_i(L_i) - t * max(0, -F_i) >= 0`. The stick limits are linear constraints for a chosen
    member-to-stick assignment (`src/packing.py` supplies the assignments), and each result is re-packed
    and re-solved. Final designs are rounded to 0.01 in and polished on that grid.
-4. **Sensitivity** (`src/sensitivity.py`): the finalists are re-scored with capacities lowered by 1.52 oz.
+4. **Sensitivity** (`src/sensitivity.py`): the five best designs per objective are re-scored with capacities lowered by 1.52 oz.
 5. **Write** (`src/visualise.py`, `src/matlab_io.py`): drawing, report, JSON and MATLAB inputs.
 6. **Verify** (`--matlab`): `matlab -batch` runs `matlab/run_verification.m`, which calls
-   `truss_analysis.m` for each design. `src/matlab_io.py` compares the results with the Python solver.
+   `truss_analysis.m` for each winner. `src/matlab_io.py` compares the results with the Python solver.
 
 ## Rules and assumptions
 
@@ -168,7 +178,8 @@ All constants are in `config.py`. Lengths are in inches and forces in ounces.
 - Kept as in the original: the `- 1.52 oz` in the capacity (so MATLAB reports the lower-bound max load,
   which the Python side compares with its own lower bound) and the sign convention (downward load
   negative in `L`, so MATLAB's positive force is compression and Python's is tension).
-- `matlab/run_verification.m` is the batch driver that the Python code calls.
+- `matlab/run_verification.m` is the batch driver that the Python code calls. For an input `<stem>.mat` it
+  writes `<stem>_output.mat` and `<stem>_output.txt` (a trailing `_input` in the stem is dropped).
 - The MATLAB launcher is found on `PATH` or in `/Applications/MATLAB_*.app/bin/matlab`. To use another,
   set `MATLAB_EXECUTABLE` in `config.py`.
 
@@ -191,7 +202,7 @@ src/matlab_io.py           MATLAB inputs, running MATLAB, comparison
 src/validation.py          random legal designs and the Python-vs-MATLAB validation
 src/pipeline.py            all stages in one call
 src/visualise.py           drawing, report, JSON
-tests/                     215 tests
+tests/                     the test suite
 results/                   generated output (git-ignored)
 ```
 
